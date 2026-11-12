@@ -1,6 +1,8 @@
 # FastAPI entrypoint (API routes)
 
 import os
+import tempfile
+from backend.pdf_reader import extract_text_from_pdf
 import shutil
 from typing import List
 from fastapi import FastAPI, Depends, UploadFile, File, HTTPException
@@ -17,9 +19,16 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Directory to temporarily store uploaded past paper PDFs
-UPLOAD_DIR = "data/raw_pdfs"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Build an absolute path to avoid current-working-directory mismatches on Windows
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UPLOAD_DIR = os.path.join(BASE_DIR, "data", "raw_pdfs")
+
+# Ensure directory exists safely on startup
+if not os.path.exists(UPLOAD_DIR):
+    try:
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+    except OSError:
+        pass
 
 @app.on_event("startup")
 def on_startup():
@@ -31,6 +40,45 @@ def on_startup():
 def read_root():
     """Health check endpoint to verify the API is running."""
     return {"status": "online", "message": "Past Paper Analytics API is running successfully."}
+
+@app.post("/pdf/read/")
+def read_uploaded_pdf(file: UploadFile = File(...)):
+
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a PDF file."
+        )
+
+    temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".pdf"
+        ) as temp_file:
+            temp_path = temp_file.name
+            shutil.copyfileobj(file.file, temp_file)
+
+        result = extract_text_from_pdf(temp_path)
+
+        return {
+            "filename": file.filename,
+            "total_pages": result["total_pages"],
+            "pages": result["pages"]
+        }
+
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded PDF could not be read."
+        )
+
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+        file.file.close()
 
 
 # --- SCOPE MANAGEMENT ENDPOINTS ---
@@ -63,9 +111,12 @@ def upload_and_parse_paper(
 ):
     """
     Uploads a past paper PDF, fetches the active scope for the subject,
-    runs local AI extraction via Ollama, and saves the questions to PostgreSQL.
+    runs local AI extraction via Ollama, and saves the questions to SQLite.
     """
-    # 1. Save the uploaded file locally
+    # Ensure directory exists recursively right before saving
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+    # 1. Save the uploaded file locally using the absolute path join
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)

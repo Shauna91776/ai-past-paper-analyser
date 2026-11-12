@@ -1,23 +1,17 @@
-# Connects Python to your PostgreSQL database
-import os
 from sqlmodel import SQLModel, create_engine, Session
 
-# Local PostgreSQL connection string (update username/password/dbname as needed)
-# Example: "postgresql://postgres:your_password@localhost:5432/past_paper_db"
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://postgres:postgres@localhost:5432/past_paper_db"
-)
+# SQLite database file stored locally in your project root
+sqlite_file_name = "database.db"
+sqlite_url = f"sqlite:///{sqlite_file_name}"
 
-# Create the database engine
-# echo=True prints SQL statements to your terminal, which is great for debugging
-engine = create_engine(DATABASE_URL, echo=True)
+# create_engine for SQLite requires connect_args for threading safety in FastAPI
+engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
 
 def create_db_and_tables():
-    """Creates all SQLModel tables in the database if they don't exist yet."""
+    """Automatically creates the SQLite database file and tables."""
     SQLModel.metadata.create_all(engine)
 
 def get_session():
-    """FastAPI dependency that yields a database session for each request."""
+    """Dependency that provides a database session for FastAPI endpoints."""
     with Session(engine) as session:
         yield session
